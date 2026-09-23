@@ -1,4 +1,4 @@
-# rustchain 🦀⛓️
+# graphflow 🦀⛓️
 
 [![Crates.io](https://img.shields.io/badge/crates.io-v0.1.0-orange.svg)](https://crates.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -7,7 +7,7 @@
 
 > A lightweight, LangGraph-inspired stateful workflow engine for Rust.
 
-`rustchain` enables you to coordinate multi-step workflows, autonomous AI agent loops, and state machines with ease. Model your processes as directed graphs with nodes (actions), static edges (transitions), and conditional edges (dynamic routing and decision making).
+`graphflow` enables you to coordinate multi-step workflows, autonomous AI agent loops, and state machines with ease. Model your processes as directed graphs with nodes (actions), static edges (transitions), and conditional edges (dynamic routing and decision making).
 
 ---
 
@@ -47,7 +47,7 @@
 
 ## 🧠 How It Works
 
-A `rustchain` graph consists of:
+A `graphflow` graph consists of:
 1. **Nodes**: Functions that mutate state `&mut T`.
 2. **Edges**: Deterministic paths connecting one node to the next.
 3. **Conditional Edges**: Decision functions that inspect `&T` and dynamically choose the next target node.
@@ -72,18 +72,18 @@ During execution:
 
 ## 📦 Installation
 
-Add `rustchain` to your `Cargo.toml`:
+Add `graphflow` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rustchain = "0.1.0"
+graphflow = "0.1.0"
 ```
 
 Or add it from your local workspace / git repository:
 
 ```toml
 [dependencies]
-rustchain = { git = "https://github.com/vesal-j/rustchain" }
+graphflow = { git = "https://github.com/vesal-j/graphflow" }
 ```
 
 ---
@@ -93,7 +93,7 @@ rustchain = { git = "https://github.com/vesal-j/rustchain" }
 Here is a complete, minimal working example in 5 steps:
 
 ```rust
-use rustchain::Graph;
+use graphflow::Graph;
 use std::fmt::Error;
 
 // Step 1: Define your state
@@ -229,7 +229,7 @@ If any referenced node is missing or entry/finish points are undefined, `compile
 In this example, an integer state is incremented and doubled in a loop until it reaches a threshold:
 
 ```rust
-use rustchain::Graph;
+use graphflow::Graph;
 
 struct CounterState {
     count: usize,
@@ -287,7 +287,7 @@ Model a classic AI agent loop:
 4. **Synthesize**: Produce final response.
 
 ```rust
-use rustchain::Graph;
+use graphflow::Graph;
 
 struct AgentState {
     query: String,
@@ -388,7 +388,7 @@ The validated, immutable graph ready for execution.
 
 ## 🛡️ Graph Validation Rules
 
-When `.compile()` is invoked, `rustchain` ensures:
+When `.compile()` is invoked, `graphflow` ensures:
 1. **Entry Point Configured**: An entry point must be provided (`"Entry point is not set"`).
 2. **Finish Point Configured**: A finish point must be provided (`"Finish point is not set"`).
 3. **Valid Entry Node**: Entry point must correspond to an added node (`"Entry point '<name>' does not exist"`).

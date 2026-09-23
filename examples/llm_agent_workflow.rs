@@ -1,4 +1,4 @@
-use rustchain::Graph;
+use graphflow::Graph;
 
 #[derive(Debug)]
 struct AgentState {

@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "rustchain"
+name = "graphflow"
 version = "0.1.0"
