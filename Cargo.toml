@@ -1,0 +1,12 @@
+[package]
+name = "rustchain"
+version = "0.1.0"
+edition = "2024"
+description = "A lightweight LangGraph-inspired workflow engine for Rust."
+license = "MIT"
+repository = "https://github.com/vesal-j/rustchain"
+readme = "README.md"
+keywords = ["llm", "agents", "workflow", "graph", "ai"]
+categories = ["development-tools"]
+
+[dependencies]
