@@ -13,6 +13,12 @@ pub struct Graph<T> {
     pub finish_point: Option<String>,
 }
 
+impl<T> Default for Graph<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T> Graph<T> {
     pub fn new() -> Self {
         Graph {
