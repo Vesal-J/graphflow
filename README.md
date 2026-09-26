@@ -379,69 +379,6 @@ Run this example:
 cargo run --example llm_agent_workflow
 ```
 
-### Example 3: Parallel Tasks with Pregel Execution (Fork-Join)
-
-Execute multiple tasks concurrently in a single Pregel superstep using scoped threads with a synchronization barrier before the next step:
-
-```rust
-use graphflow::Graph;
-use std::sync::{Arc, Mutex};
-
-#[derive(Debug, Clone)]
-struct SearchState {
-    query: String,
-    results: Arc<Mutex<Vec<String>>>,
-}
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut graph: Graph<SearchState> = Graph::new();
-
-    graph
-        .add_node("start".to_string(), |_| Ok(()))
-        .add_node("search_web".to_string(), |s| {
-            s.results.lock().unwrap().push("Web Result".to_string());
-            Ok(())
-        })
-        .add_node("search_db".to_string(), |s| {
-            s.results.lock().unwrap().push("DB Result".to_string());
-            Ok(())
-        })
-        .add_node("aggregate".to_string(), |s| {
-            println!("Collected {} results!", s.results.lock().unwrap().len());
-            Ok(())
-        })
-        .add_node("finish".to_string(), |_| Ok(()))
-        // Fan-out: triggers search_web and search_db concurrently in the same superstep
-        .add_parallel_edge(
-            "start".to_string(),
-            vec!["search_web".to_string(), "search_db".to_string()],
-        )
-        // Fan-in: both workers route to aggregate at the barrier
-        .add_edge("search_web".to_string(), "aggregate".to_string())
-        .add_edge("search_db".to_string(), "aggregate".to_string())
-        .add_edge("aggregate".to_string(), "finish".to_string())
-        .set_entry_point("start".to_string())
-        .set_finish_point("finish".to_string());
-
-    let compiled = graph.compile().unwrap();
-
-    let state = SearchState {
-        query: "Pregel in Rust".to_string(),
-        results: Arc::new(Mutex::new(Vec::new())),
-    };
-
-    compiled.invoke_pregel(state)?;
-    Ok(())
-}
-```
-
-Run this example:
-```bash
-cargo run --example parallel_pregel
-```
-
----
-
 ## 📖 API Reference
 
 ### `Graph<T>`
