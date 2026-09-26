@@ -1,4 +1,4 @@
-use graphflow::{init_logger, Graph, GraphError};
+use graphflow::{init_logger, Graph, GraphError, StateContext};
 
 #[derive(Debug)]
 struct AgentState {
@@ -9,21 +9,25 @@ struct AgentState {
     response: Option<String>,
 }
 
-fn plan(state: &mut AgentState) -> Result<(), GraphError> {
-    log::info!("[Plan] Planning response for query: '{}'", state.query);
-    state.iterations += 1;
+fn plan(ctx: &mut StateContext<'_, AgentState>) -> Result<(), GraphError> {
+    log::info!("[Plan] Planning response for query: '{}'", ctx.query);
+    ctx.update(|state| {
+        state.iterations += 1;
+    });
     Ok(())
 }
 
-fn search_tools(state: &mut AgentState) -> Result<(), GraphError> {
-    state.iterations += 1;
-    log::info!(
-        "[Tool] Querying search tool (attempt {})...",
-        state.iterations
-    );
-    if state.iterations >= 2 {
-        state.has_sufficient_context = true;
-    }
+fn search_tools(ctx: &mut StateContext<'_, AgentState>) -> Result<(), GraphError> {
+    ctx.update(|state| {
+        state.iterations += 1;
+        log::info!(
+            "[Tool] Querying search tool (attempt {})...",
+            state.iterations
+        );
+        if state.iterations >= 2 {
+            state.has_sufficient_context = true;
+        }
+    });
     Ok(())
 }
 
@@ -35,9 +39,11 @@ fn route_decision(state: &AgentState) -> String {
     }
 }
 
-fn synthesize(state: &mut AgentState) -> Result<(), GraphError> {
+fn synthesize(ctx: &mut StateContext<'_, AgentState>) -> Result<(), GraphError> {
     log::info!("[Synthesize] Generating final response...");
-    state.response = Some(format!("Final answer for '{}'", state.query));
+    ctx.update(|state| {
+        state.response = Some(format!("Final answer for '{}'", state.query));
+    });
     Ok(())
 }
 

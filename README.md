@@ -50,9 +50,10 @@
 ## 🧠 How It Works
 
 A `graphflow` graph consists of:
-1. **Nodes**: Functions that mutate state `&mut T`.
+1. **Nodes**: Functions that inspect state and mutate it safely through `StateContext<'_, T>`.
 2. **Edges**: Deterministic paths connecting one node to the next.
 3. **Conditional Edges**: Decision functions that inspect `&T` and dynamically choose the next target node.
+4. **Lifecycle Hooks**: Observers that track execution events (`on_agent_start`, `on_agent_state_change`, `on_node_start`, `on_node_end`, `on_conditional_node_start`, `on_conditional_node_end`, `on_agent_end`).
 
 ```mermaid
 flowchart LR
@@ -95,7 +96,7 @@ graphflow = { git = "https://github.com/vesal-j/graphflow" }
 Here is a complete, minimal working example in 5 steps:
 
 ```rust
-use graphflow::{init_logger, Graph, GraphError};
+use graphflow::{init_logger, Graph, GraphError, StateContext};
 
 // Step 1: Define your state
 struct WorkflowState {
@@ -103,16 +104,20 @@ struct WorkflowState {
     pub step_count: usize,
 }
 
-// Step 2: Define your node functions using custom GraphError
-fn step_one(state: &mut WorkflowState) -> Result<(), GraphError> {
-    state.message.push_str("Hello");
-    state.step_count += 1;
+// Step 2: Define your node functions using StateContext and custom GraphError
+fn step_one(ctx: &mut StateContext<'_, WorkflowState>) -> Result<(), GraphError> {
+    ctx.update(|state| {
+        state.message.push_str("Hello");
+        state.step_count += 1;
+    });
     Ok(())
 }
 
-fn step_two(state: &mut WorkflowState) -> Result<(), GraphError> {
-    state.message.push_str(" World!");
-    state.step_count += 1;
+fn step_two(ctx: &mut StateContext<'_, WorkflowState>) -> Result<(), GraphError> {
+    ctx.update(|state| {
+        state.message.push_str(" World!");
+        state.step_count += 1;
+    });
     Ok(())
 }
 
@@ -152,7 +157,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### 1. Shared State (`T`)
 
-The state represents the central blackboard or context of your pipeline. Every node receives a mutable reference (`&mut T`), allowing it to update fields, append messages, or increment counters.
+The state represents the central blackboard or context of your pipeline. Nodes inspect and mutate state through `StateContext<'_, T>`, ensuring that state changes are controlled and tracked by the hook system.
 
 ```rust
 struct AgentState {
@@ -162,18 +167,24 @@ struct AgentState {
 }
 ```
 
-### 2. Nodes (`NodeFunction<T>`)
+### 2. Nodes (`NodeFunction<T>`) & `StateContext`
 
-Nodes perform discrete units of computation. A node function signature uses the custom `GraphError`:
+Nodes perform discrete units of computation. Instead of receiving a raw mutable reference, nodes receive a `&mut StateContext<'_, T>`:
 
 ```rust
-pub type NodeFunction<T> = fn(&mut T) -> Result<(), GraphError>;
+pub type NodeFunction<T> = fn(&mut StateContext<'_, T>) -> Result<(), GraphError>;
 ```
+
+- **Read state**: Access fields directly using `ctx.field` (via `Deref`) or `ctx.get()`.
+- **Mutate state**: Call `ctx.update(|state| { ... })` or `ctx.set(new_state)`. Every mutation automatically triggers the `on_agent_state_change` lifecycle hook. Read-only nodes will not trigger unnecessary state change events.
 
 Example:
 ```rust
-fn execute_tool(state: &mut AgentState) -> Result<(), GraphError> {
-    state.tool_results.push("Tool output".to_string());
+fn execute_tool(ctx: &mut StateContext<'_, AgentState>) -> Result<(), GraphError> {
+    log::info!("Current iteration: {}", ctx.iteration); // Read via Deref
+    ctx.update(|state| {
+        state.tool_results.push("Tool output".to_string());
+    }); // Automatically triggers on_agent_state_change
     Ok(())
 }
 ```
@@ -244,18 +255,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut graph: Graph<CounterState> = Graph::new();
 
     graph
-        .add_node("increment".to_string(), |state| {
-            state.count += 1;
-            println!("Count incremented to {}", state.count);
+        .add_node("increment".to_string(), |ctx| {
+            ctx.update(|state| state.count += 1);
+            println!("Count incremented to {}", ctx.count);
             Ok(())
         })
-        .add_node("double".to_string(), |state| {
-            state.count *= 2;
-            println!("Count doubled to {}", state.count);
+        .add_node("double".to_string(), |ctx| {
+            ctx.update(|state| state.count *= 2);
+            println!("Count doubled to {}", ctx.count);
             Ok(())
         })
-        .add_node("finish".to_string(), |state| {
-            println!("Done! Final count: {}", state.count);
+        .add_node("finish".to_string(), |ctx| {
+            println!("Done! Final count: {}", ctx.count);
             Ok(())
         })
         .add_edge("increment".to_string(), "double".to_string())
@@ -292,7 +303,7 @@ Model a classic AI agent loop:
 4. **Synthesize**: Produce final response.
 
 ```rust
-use graphflow::{init_logger, Graph, GraphError};
+use graphflow::{init_logger, Graph, GraphError, StateContext};
 
 struct AgentState {
     query: String,
@@ -302,17 +313,19 @@ struct AgentState {
     response: Option<String>,
 }
 
-fn plan(state: &mut AgentState) -> Result<(), GraphError> {
-    log::info!("[Plan] Planning query: '{}'", state.query);
+fn plan(ctx: &mut StateContext<'_, AgentState>) -> Result<(), GraphError> {
+    log::info!("[Plan] Planning query: '{}'", ctx.query);
     Ok(())
 }
 
-fn search_tools(state: &mut AgentState) -> Result<(), GraphError> {
-    state.iterations += 1;
-    log::info!("[Tool] Running search (iteration {})...", state.iterations);
-    if state.iterations >= 2 {
-        state.has_sufficient_context = true;
-    }
+fn search_tools(ctx: &mut StateContext<'_, AgentState>) -> Result<(), GraphError> {
+    ctx.update(|state| {
+        state.iterations += 1;
+        log::info!("[Tool] Running search (iteration {})...", state.iterations);
+        if state.iterations >= 2 {
+            state.has_sufficient_context = true;
+        }
+    });
     Ok(())
 }
 
@@ -324,9 +337,11 @@ fn route_decision(state: &AgentState) -> String {
     }
 }
 
-fn synthesize(state: &mut AgentState) -> Result<(), GraphError> {
+fn synthesize(ctx: &mut StateContext<'_, AgentState>) -> Result<(), GraphError> {
     log::info!("[Synthesize] Synthesizing final response...");
-    state.response = Some(format!("Answer for: {}", state.query));
+    ctx.update(|state| {
+        state.response = Some(format!("Answer for: {}", state.query));
+    });
     Ok(())
 }
 
@@ -486,6 +501,49 @@ init_logger();
 
 // Or specify a default filter level
 init_logger_with_level(LevelFilter::Debug);
+```
+
+### 🪝 Lifecycle Hook System
+
+`graphflow` provides an event-driven hook system to observe the complete graph lifecycle without coupling business logic to external event dispatchers. All hooks receive read-only references to state (`&T`):
+
+| Hook Event | Trigger Point | Arguments |
+| :--- | :--- | :--- |
+| `on_agent_start` | Graph execution begins at entry point | `entry_point: &str, state: &T` |
+| `on_node_start` | Immediately before a node begins | `node_name: &str, state: &T` |
+| `on_agent_state_change` | Triggered whenever state is mutated via `ctx.update` or `ctx.set` | `node_name: &str, state: &T` |
+| `on_node_end` | Immediately after a node finishes | `node_name: &str, state: &T, result: &Result<(), GraphError>` |
+| `on_conditional_node_start` | Before evaluating a conditional edge | `from_node: &str, state: &T` |
+| `on_conditional_node_end` | After dynamic routing decision is made | `from_node: &str, next_node: &str, state: &T` |
+| `on_agent_end` | Graph execution completes at finish point | `finish_point: &str, state: &T` |
+
+#### Using Closure Hooks:
+```rust
+graph
+    .on_agent_start(|entry, state| println!("Agent starting at '{entry}'"))
+    .on_agent_state_change(|node, state| println!("State changed in '{node}'"))
+    .on_node_start(|node, state| println!("Node '{node}' starting"))
+    .on_node_end(|node, state, result| println!("Node '{node}' finished: {:?}", result.is_ok()))
+    .on_agent_end(|finish, state| println!("Agent finished at '{finish}'"));
+```
+
+#### Using Custom Struct Hook (`GraphHook<T>`):
+```rust
+use graphflow::{GraphHook, GraphError};
+
+struct AuditHook;
+
+impl<T: std::fmt::Debug> GraphHook<T> for AuditHook {
+    fn on_agent_start(&self, entry: &str, state: &T) {
+        println!("[Audit] Start: {entry}, state: {state:?}");
+    }
+
+    fn on_agent_state_change(&self, node: &str, state: &T) {
+        println!("[Audit] State modified by {node}: {state:?}");
+    }
+}
+
+graph.add_hook(AuditHook);
 ```
 
 ---

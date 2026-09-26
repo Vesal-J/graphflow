@@ -8,7 +8,11 @@ repository = "https://github.com/vesal-j/graphflow"
 readme = "README.md"
 keywords = ["llm", "agents", "workflow", "graph", "ai"]
 categories = ["development-tools"]
+exclude = [
+    "examples/*",
+]
 
 [dependencies]
 log = "0.4"
 env_logger = "0.11"
+

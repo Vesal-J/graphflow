@@ -1,23 +1,24 @@
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod tests {
-    use crate::{Graph, GraphError};
+    use crate::{Graph, GraphError, StateContext};
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, PartialEq, Clone)]
     struct TestState {
         count: usize,
     }
 
-    fn increment(state: &mut TestState) -> Result<(), GraphError> {
-        state.count += 1;
+    fn increment(ctx: &mut StateContext<'_, TestState>) -> Result<(), GraphError> {
+        ctx.update(|s| s.count += 1);
         Ok(())
     }
 
-    fn increment_by_two(state: &mut TestState) -> Result<(), GraphError> {
-        state.count += 2;
+    fn increment_by_two(ctx: &mut StateContext<'_, TestState>) -> Result<(), GraphError> {
+        ctx.update(|s| s.count += 2);
         Ok(())
     }
 
-    fn finish(_state: &mut TestState) -> Result<(), GraphError> {
+    fn finish(_ctx: &mut StateContext<'_, TestState>) -> Result<(), GraphError> {
         Ok(())
     }
 
@@ -545,7 +546,7 @@ mod tests {
 
         let result = compiled.invoke(state.clone());
         assert!(result.is_err());
-        assert_eq!(*state.ran_second.lock().unwrap(), false);
+        assert!(!(*state.ran_second.lock().unwrap()));
     }
 
     // Reaching a node without an outgoing edge (when not finish point) returns Error
@@ -867,6 +868,231 @@ mod tests {
         log::info!("Test info statement from unit test");
         log::warn!("Test warn statement from unit test");
         log::error!("Test error statement from unit test");
+    }
+
+    // Hook system tests
+    #[test]
+    fn test_hooks_full_lifecycle() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Debug, PartialEq, Clone)]
+        enum HookEvent {
+            AgentStart(String, usize),
+            NodeStart(String, usize),
+            NodeEnd(String, usize, bool),
+            StateChange(String, usize),
+            ConditionalStart(String, usize),
+            ConditionalEnd(String, String, usize),
+            AgentEnd(String, usize),
+        }
+
+        let events: Arc<Mutex<Vec<HookEvent>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let mut graph: Graph<TestState> = Graph::new();
+
+        let e1 = events.clone();
+        graph.on_agent_start(move |entry, state| {
+            e1.lock().unwrap().push(HookEvent::AgentStart(entry.to_string(), state.count));
+        });
+
+        let e2 = events.clone();
+        graph.on_node_start(move |node, state| {
+            e2.lock().unwrap().push(HookEvent::NodeStart(node.to_string(), state.count));
+        });
+
+        let e3 = events.clone();
+        graph.on_node_end(move |node, state, result| {
+            e3.lock().unwrap().push(HookEvent::NodeEnd(node.to_string(), state.count, result.is_ok()));
+        });
+
+        let e4 = events.clone();
+        graph.on_agent_state_change(move |node, state| {
+            e4.lock().unwrap().push(HookEvent::StateChange(node.to_string(), state.count));
+        });
+
+        let e5 = events.clone();
+        graph.on_conditional_node_start(move |node, state| {
+            e5.lock().unwrap().push(HookEvent::ConditionalStart(node.to_string(), state.count));
+        });
+
+        let e6 = events.clone();
+        graph.on_conditional_node_end(move |from, next, state| {
+            e6.lock().unwrap().push(HookEvent::ConditionalEnd(from.to_string(), next.to_string(), state.count));
+        });
+
+        let e7 = events.clone();
+        graph.on_agent_end(move |finish, state| {
+            e7.lock().unwrap().push(HookEvent::AgentEnd(finish.to_string(), state.count));
+        });
+
+        graph
+            .add_node("step_1".to_string(), increment)
+            .add_node("finish".to_string(), finish)
+            .add_conditional_edge("step_1".to_string(), |_| "finish".to_string())
+            .set_entry_point("step_1".to_string())
+            .set_finish_point("finish".to_string());
+
+        let compiled = graph.compile().unwrap();
+        let final_state = compiled.invoke(TestState { count: 10 }).unwrap();
+        assert_eq!(final_state.count, 11);
+
+        let recorded = events.lock().unwrap().clone();
+        assert_eq!(
+            recorded,
+            vec![
+                HookEvent::AgentStart("step_1".to_string(), 10),
+                HookEvent::NodeStart("step_1".to_string(), 10),
+                HookEvent::StateChange("step_1".to_string(), 11),
+                HookEvent::NodeEnd("step_1".to_string(), 11, true),
+                HookEvent::ConditionalStart("step_1".to_string(), 11),
+                HookEvent::ConditionalEnd("step_1".to_string(), "finish".to_string(), 11),
+                HookEvent::NodeStart("finish".to_string(), 11),
+                HookEvent::NodeEnd("finish".to_string(), 11, true),
+                HookEvent::AgentEnd("finish".to_string(), 11),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_custom_struct_graph_hook() {
+        use std::sync::{Arc, Mutex};
+        use crate::hooks::GraphHook;
+
+        #[derive(Default, Clone)]
+        struct MyAuditHook {
+            pub log: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl GraphHook<TestState> for MyAuditHook {
+            fn on_agent_start(&self, entry_point: &str, state: &TestState) {
+                self.log.lock().unwrap().push(format!("start:{entry_point}:{}", state.count));
+            }
+
+            fn on_agent_state_change(&self, node_name: &str, state: &TestState) {
+                self.log.lock().unwrap().push(format!("changed:{node_name}:{}", state.count));
+            }
+
+            fn on_node_end(&self, node_name: &str, state: &TestState, result: &Result<(), GraphError>) {
+                self.log.lock().unwrap().push(format!("end:{node_name}:{}:{}", state.count, result.is_ok()));
+            }
+
+            fn on_agent_end(&self, finish_point: &str, state: &TestState) {
+                self.log.lock().unwrap().push(format!("finish:{finish_point}:{}", state.count));
+            }
+        }
+
+        let audit = MyAuditHook::default();
+        let log_ref = audit.log.clone();
+
+        let mut graph: Graph<TestState> = Graph::new();
+        graph
+            .add_hook(audit)
+            .add_node("step_a".to_string(), increment)
+            .add_node("finish".to_string(), finish)
+            .add_edge("step_a".to_string(), "finish".to_string())
+            .set_entry_point("step_a".to_string())
+            .set_finish_point("finish".to_string());
+
+        let compiled = graph.compile().unwrap();
+        compiled.invoke(TestState { count: 0 }).unwrap();
+
+        let history = log_ref.lock().unwrap().clone();
+        assert_eq!(
+            history,
+            vec![
+                "start:step_a:0",
+                "changed:step_a:1",
+                "end:step_a:1:true",
+                "end:finish:1:true",
+                "finish:finish:1",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_state_context_multiple_mutations_and_read_only() {
+        use std::sync::{Arc, Mutex};
+
+        let state_changes = Arc::new(Mutex::new(Vec::new()));
+        let sc_clone = state_changes.clone();
+
+        let mut graph: Graph<TestState> = Graph::new();
+        graph
+            .on_agent_state_change(move |node, state| {
+                sc_clone.lock().unwrap().push((node.to_string(), state.count));
+            })
+            // Node that updates state multiple times and uses set()
+            .add_node("mutator".to_string(), |ctx| {
+                // Read via Deref
+                assert_eq!(ctx.count, 0);
+
+                // First mutation via update()
+                ctx.update(|s| s.count += 5);
+
+                // Second mutation via update()
+                ctx.update(|s| s.count += 10);
+
+                // Third mutation via set()
+                ctx.set(TestState { count: 100 });
+
+                Ok(())
+            })
+            // Read-only node that performs no state mutations
+            .add_node("read_only".to_string(), |ctx| {
+                assert_eq!(ctx.count, 100);
+                assert_eq!(ctx.node_name(), "read_only");
+                assert_eq!(ctx.get().count, 100);
+                Ok(())
+            })
+            .add_edge("mutator".to_string(), "read_only".to_string())
+            .set_entry_point("mutator".to_string())
+            .set_finish_point("read_only".to_string());
+
+        let compiled = graph.compile().unwrap();
+        let final_state = compiled.invoke(TestState { count: 0 }).unwrap();
+        assert_eq!(final_state.count, 100);
+
+        // Verify state change hooks fired exactly when mutated, and NOT for read_only
+        let changes = state_changes.lock().unwrap().clone();
+        assert_eq!(
+            changes,
+            vec![
+                ("mutator".to_string(), 5),
+                ("mutator".to_string(), 15),
+                ("mutator".to_string(), 100),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_hook_on_node_error() {
+        use std::sync::{Arc, Mutex};
+
+        let last_error = Arc::new(Mutex::new(None));
+        let last_error_clone = last_error.clone();
+
+        let mut graph: Graph<TestState> = Graph::new();
+        graph
+            .on_node_end(move |_node, _state, res| {
+                if let Err(e) = res {
+                    *last_error_clone.lock().unwrap() = Some(e.clone());
+                }
+            })
+            .add_node("failing".to_string(), |_| {
+                Err(GraphError::ExecutionError("Intentional failure".to_string()))
+            })
+            .set_entry_point("failing".to_string())
+            .set_finish_point("failing".to_string());
+
+        let compiled = graph.compile().unwrap();
+        let res = compiled.invoke(TestState { count: 0 });
+        assert!(res.is_err());
+
+        let err = last_error.lock().unwrap().clone();
+        assert_eq!(
+            err,
+            Some(GraphError::ExecutionError("Intentional failure".to_string()))
+        );
     }
 }
 

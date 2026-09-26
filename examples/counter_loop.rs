@@ -13,18 +13,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut graph: Graph<AgentState> = Graph::new();
 
     graph
-        .add_node("increment".to_string(), |state| {
-            log::info!("Node 'increment': count was {}, incrementing by 1", state.count);
-            state.count += 1;
+        .add_node("increment".to_string(), |ctx| {
+            log::info!("Node 'increment': count was {}, incrementing by 1", ctx.count);
+            ctx.update(|state| state.count += 1);
             Ok(())
         })
-        .add_node("double".to_string(), |state| {
-            log::info!("Node 'double': count was {}, doubling", state.count);
-            state.count *= 2;
+        .add_node("double".to_string(), |ctx| {
+            log::info!("Node 'double': count was {}, doubling", ctx.count);
+            ctx.update(|state| state.count *= 2);
             Ok(())
         })
-        .add_node("finish".to_string(), |state| {
-            log::info!("Node 'finish': target reached with final count {}", state.count);
+        .add_node("finish".to_string(), |ctx| {
+            log::info!("Node 'finish': target reached with final count {}", ctx.count);
             Ok(())
         })
         .add_edge("increment".to_string(), "double".to_string())

@@ -1,9 +1,11 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::errors::GraphError;
+use crate::hooks::{GraphHook, HookDispatcher, Hooks, StateContext};
 use crate::CompiledGraph;
 
-pub type NodeFunction<T> = fn(&mut T) -> Result<(), GraphError>;
+pub type NodeFunction<T> = fn(&mut StateContext<'_, T>) -> Result<(), GraphError>;
 pub type BranchFunction<T> = fn(&T) -> String;
 
 pub struct Graph<T> {
@@ -12,15 +14,45 @@ pub struct Graph<T> {
     pub conditional_edges: HashMap<String, BranchFunction<T>>,
     pub entry_point: Option<String>,
     pub finish_point: Option<String>,
+    pub dispatcher: HookDispatcher<T>,
+    pub hooks: Hooks<T>,
 }
 
-impl<T> Default for Graph<T> {
+impl<T: 'static> Default for Graph<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T> Graph<T> {
+impl<T> Clone for Graph<T> {
+    fn clone(&self) -> Self {
+        Self {
+            nodes: self.nodes.clone(),
+            edges: self.edges.clone(),
+            conditional_edges: self.conditional_edges.clone(),
+            entry_point: self.entry_point.clone(),
+            finish_point: self.finish_point.clone(),
+            dispatcher: self.dispatcher.clone(),
+            hooks: self.hooks.clone(),
+        }
+    }
+}
+
+impl<T> std::fmt::Debug for Graph<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Graph")
+            .field("nodes_count", &self.nodes.len())
+            .field("edges", &self.edges)
+            .field("conditional_edges_count", &self.conditional_edges.len())
+            .field("entry_point", &self.entry_point)
+            .field("finish_point", &self.finish_point)
+            .field("dispatcher", &self.dispatcher)
+            .field("hooks", &self.hooks)
+            .finish()
+    }
+}
+
+impl<T: 'static> Graph<T> {
     pub fn new() -> Self {
         Graph {
             nodes: HashMap::new(),
@@ -28,6 +60,8 @@ impl<T> Graph<T> {
             conditional_edges: HashMap::new(),
             entry_point: None,
             finish_point: None,
+            dispatcher: HookDispatcher::new(),
+            hooks: Hooks::new(),
         }
     }
 
@@ -58,6 +92,78 @@ impl<T> Graph<T> {
     pub fn set_finish_point(&mut self, from: String) -> &mut Self {
         log::debug!("Setting finish point: '{from}'");
         self.finish_point = Some(from);
+        self
+    }
+
+    /// Adds a custom struct implementing `GraphHook<T>`.
+    pub fn add_hook<H>(&mut self, hook: H) -> &mut Self
+    where
+        H: GraphHook<T> + 'static,
+    {
+        self.dispatcher.add_hook(Arc::new(hook));
+        self
+    }
+
+    /// Hook invoked when the agent starts execution.
+    pub fn on_agent_start<F>(&mut self, hook: F) -> &mut Self
+    where
+        F: Fn(&str, &T) + Send + Sync + 'static,
+    {
+        self.hooks.add_on_agent_start(hook);
+        self
+    }
+
+    /// Hook invoked when the state is mutated after a successful node execution.
+    pub fn on_agent_state_change<F>(&mut self, hook: F) -> &mut Self
+    where
+        F: Fn(&str, &T) + Send + Sync + 'static,
+    {
+        self.hooks.add_on_agent_state_change(hook);
+        self
+    }
+
+    /// Hook invoked right before a node begins execution.
+    pub fn on_node_start<F>(&mut self, hook: F) -> &mut Self
+    where
+        F: Fn(&str, &T) + Send + Sync + 'static,
+    {
+        self.hooks.add_on_node_start(hook);
+        self
+    }
+
+    /// Hook invoked right after a node completes execution with its result.
+    pub fn on_node_end<F>(&mut self, hook: F) -> &mut Self
+    where
+        F: Fn(&str, &T, &Result<(), GraphError>) + Send + Sync + 'static,
+    {
+        self.hooks.add_on_node_end(hook);
+        self
+    }
+
+    /// Hook invoked before evaluating a conditional edge.
+    pub fn on_conditional_node_start<F>(&mut self, hook: F) -> &mut Self
+    where
+        F: Fn(&str, &T) + Send + Sync + 'static,
+    {
+        self.hooks.add_on_conditional_node_start(hook);
+        self
+    }
+
+    /// Hook invoked after evaluating a conditional edge with the decided next node.
+    pub fn on_conditional_node_end<F>(&mut self, hook: F) -> &mut Self
+    where
+        F: Fn(&str, &str, &T) + Send + Sync + 'static,
+    {
+        self.hooks.add_on_conditional_node_end(hook);
+        self
+    }
+
+    /// Hook invoked when the agent completes execution at the finish point.
+    pub fn on_agent_end<F>(&mut self, hook: F) -> &mut Self
+    where
+        F: Fn(&str, &T) + Send + Sync + 'static,
+    {
+        self.hooks.add_on_agent_end(hook);
         self
     }
 
@@ -122,12 +228,16 @@ impl<T> Graph<T> {
         let edges_clone = self.edges.clone();
         let conditional_edges_clone = self.conditional_edges.clone();
 
+        let mut dispatcher = self.dispatcher.clone();
+        dispatcher.add_hook(Arc::new(self.hooks.clone()));
+
         Ok(CompiledGraph {
             nodes: nodes_clone,
             edges: edges_clone,
             conditional_edges: conditional_edges_clone,
             entry_point,
             finish_point,
+            dispatcher,
         })
     }
 }
