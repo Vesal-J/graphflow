@@ -1,6 +1,6 @@
 [package]
 name = "graphflow"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 description = "A lightweight LangGraph-inspired workflow engine for Rust."
 license = "MIT"
