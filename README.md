@@ -79,7 +79,7 @@ Add `graphflow` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-graphflow = "0.1.0"
+graphflow = "0.3.0"
 ```
 
 Or add it from your local workspace / git repository:
