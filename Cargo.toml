@@ -10,3 +10,5 @@ keywords = ["llm", "agents", "workflow", "graph", "ai"]
 categories = ["development-tools"]
 
 [dependencies]
+log = "0.4"
+env_logger = "0.11"

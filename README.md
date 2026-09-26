@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/badge/crates.io-v0.1.0-orange.svg)](https://crates.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust: 2024](https://img.shields.io/badge/Rust-2024%20Edition-black.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/Tests-39%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-42%20passing-brightgreen.svg)]()
 
 > A lightweight, LangGraph-inspired stateful workflow engine for Rust.
 
@@ -41,6 +41,8 @@
 - 🔀 **Dynamic Branching & Decision Routing**: Prioritizes conditional edges to route execution based on runtime state inspection.
 - 🔄 **Cycles & Loops**: Seamlessly supports looping workflows for agent retries, human-in-the-loop flows, or iterative optimization.
 - 🛡️ **Pre-Execution Graph Validation**: Verifies entry/finish nodes and edge integrity during `.compile()` before any execution begins.
+- 🚦 **Comprehensive Custom Errors**: Strongly-typed `GraphError`, `PregelError`, `ChannelError`, and unified `GraphflowError` replacing basic/string errors.
+- 📜 **Built-in Styled Logging**: Powered by the `log` crate with `init_logger()` providing colored levels, timestamps, and module targets.
 - 🛠️ **Fluent Builder API**: Intuitive method chaining to construct workflows cleanly.
 
 ---
@@ -93,8 +95,7 @@ graphflow = { git = "https://github.com/vesal-j/graphflow" }
 Here is a complete, minimal working example in 5 steps:
 
 ```rust
-use graphflow::Graph;
-use std::fmt::Error;
+use graphflow::{init_logger, Graph, GraphError};
 
 // Step 1: Define your state
 struct WorkflowState {
@@ -102,20 +103,23 @@ struct WorkflowState {
     pub step_count: usize,
 }
 
-// Step 2: Define your node functions
-fn step_one(state: &mut WorkflowState) -> Result<(), Error> {
+// Step 2: Define your node functions using custom GraphError
+fn step_one(state: &mut WorkflowState) -> Result<(), GraphError> {
     state.message.push_str("Hello");
     state.step_count += 1;
     Ok(())
 }
 
-fn step_two(state: &mut WorkflowState) -> Result<(), Error> {
+fn step_two(state: &mut WorkflowState) -> Result<(), GraphError> {
     state.message.push_str(" World!");
     state.step_count += 1;
     Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Optional: Initialize the styled logging system
+    init_logger();
+
     // Step 3: Build the graph
     let mut graph: Graph<WorkflowState> = Graph::new();
 
@@ -126,8 +130,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .set_entry_point("first".to_string())
         .set_finish_point("second".to_string());
 
-    // Step 4: Compile and validate the graph
-    let compiled = graph.compile().map_err(|err| format!("Graph error: {err}"))?;
+    // Step 4: Compile and validate the graph (returns Result<CompiledGraph<T>, GraphError>)
+    let compiled = graph.compile()?;
 
     // Step 5: Execute the graph with initial state
     let state = WorkflowState {
@@ -135,7 +139,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         step_count: 0,
     };
 
-    compiled.invoke(state)?;
+    let final_state = compiled.invoke(state)?;
+    println!("Final message: {}", final_state.message);
 
     Ok(())
 }
@@ -159,15 +164,15 @@ struct AgentState {
 
 ### 2. Nodes (`NodeFunction<T>`)
 
-Nodes perform the discrete units of computation. A node function signature is:
+Nodes perform discrete units of computation. A node function signature uses the custom `GraphError`:
 
 ```rust
-pub type NodeFunction<T> = fn(&mut T) -> Result<(), std::fmt::Error>;
+pub type NodeFunction<T> = fn(&mut T) -> Result<(), GraphError>;
 ```
 
 Example:
 ```rust
-fn execute_tool(state: &mut AgentState) -> Result<(), std::fmt::Error> {
+fn execute_tool(state: &mut AgentState) -> Result<(), GraphError> {
     state.tool_results.push("Tool output".to_string());
     Ok(())
 }
@@ -218,7 +223,7 @@ Calling `.compile()` verifies graph integrity before executing:
 let compiled = graph.compile()?;
 ```
 
-If any referenced node is missing or entry/finish points are undefined, `compile` returns a descriptive `Err(String)`.
+If any referenced node is missing or entry/finish points are undefined, `compile` returns a descriptive typed `Err(GraphError)` (e.g. `GraphError::MissingEntryPoint`, `GraphError::EdgeSourceNotFound`).
 
 ---
 
@@ -287,7 +292,7 @@ Model a classic AI agent loop:
 4. **Synthesize**: Produce final response.
 
 ```rust
-use graphflow::Graph;
+use graphflow::{init_logger, Graph, GraphError};
 
 struct AgentState {
     query: String,
@@ -297,14 +302,14 @@ struct AgentState {
     response: Option<String>,
 }
 
-fn plan(state: &mut AgentState) -> Result<(), std::fmt::Error> {
-    println!("[Plan] Planning query: '{}'", state.query);
+fn plan(state: &mut AgentState) -> Result<(), GraphError> {
+    log::info!("[Plan] Planning query: '{}'", state.query);
     Ok(())
 }
 
-fn search_tools(state: &mut AgentState) -> Result<(), std::fmt::Error> {
+fn search_tools(state: &mut AgentState) -> Result<(), GraphError> {
     state.iterations += 1;
-    println!("[Tool] Running search (iteration {})...", state.iterations);
+    log::info!("[Tool] Running search (iteration {})...", state.iterations);
     if state.iterations >= 2 {
         state.has_sufficient_context = true;
     }
@@ -319,13 +324,15 @@ fn route_decision(state: &AgentState) -> String {
     }
 }
 
-fn synthesize(state: &mut AgentState) -> Result<(), std::fmt::Error> {
-    println!("[Synthesize] Synthesizing final response...");
+fn synthesize(state: &mut AgentState) -> Result<(), GraphError> {
+    log::info!("[Synthesize] Synthesizing final response...");
     state.response = Some(format!("Answer for: {}", state.query));
     Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    init_logger();
+
     let mut graph: Graph<AgentState> = Graph::new();
 
     graph
@@ -337,7 +344,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .set_entry_point("plan".to_string())
         .set_finish_point("synthesize".to_string());
 
-    let compiled = graph.compile().map_err(|e| format!("Compile error: {e}"))?;
+    let compiled = graph.compile()?;
 
     let state = AgentState {
         query: "What is the capital of Rustland?".to_string(),
@@ -430,13 +437,12 @@ The builder struct used to declare workflow topology.
 | :--- | :--- | :--- |
 | `new()` | `pub fn new() -> Self` | Creates an empty graph builder. |
 | `default()` | `fn default() -> Self` | Equivalent to `Graph::new()`. |
-| `add_node` | `&mut Self -> &mut Self` | Registers a named node function. |
-| `add_edge` | `&mut Self -> &mut Self` | Adds a directional edge between two nodes (supports comma-separated targets). |
-| `add_parallel_edge` | `&mut Self, from: String, targets: Vec<String> -> &mut Self` | Adds a fan-out transition activating multiple parallel tasks in the next superstep. |
-| `add_conditional_edge` | `&mut Self -> &mut Self` | Adds a dynamic branching edge evaluated via `BranchFunction<T>` (can return comma-separated targets for parallel fan-out). |
-| `set_entry_point` | `&mut Self -> &mut Self` | Sets the start node name (or comma-separated names for parallel entry). |
-| `set_finish_point` | `&mut Self -> &mut Self` | Sets the termination node name. |
-| `compile` | `&mut Self -> Result<CompiledGraph<T>, String>` | Validates the graph structure and returns an executable `CompiledGraph`. |
+| `add_node` | `&mut Self, name: String, function: NodeFunction<T> -> &mut Self` | Registers a named node function. |
+| `add_edge` | `&mut Self, from: String, to: String -> &mut Self` | Adds a directional edge between two nodes. |
+| `add_conditional_edge` | `&mut Self, from: String, branch: BranchFunction<T> -> &mut Self` | Adds a dynamic branching edge evaluated via `BranchFunction<T>`. |
+| `set_entry_point` | `&mut Self, from: String -> &mut Self` | Sets the start node name. |
+| `set_finish_point` | `&mut Self, from: String -> &mut Self` | Sets the termination node name. |
+| `compile` | `&mut Self -> Result<CompiledGraph<T>, GraphError>` | Validates graph structure and returns an executable `CompiledGraph`. |
 
 ### `CompiledGraph<T>`
 
@@ -444,9 +450,43 @@ The validated, immutable graph ready for execution.
 
 | Method | Signature | Description |
 | :--- | :--- | :--- |
-| `invoke` | `&self, state: T -> Result<(), std::fmt::Error>` | Executes the graph using the Pregel Bulk Synchronous Parallel execution model. |
-| `invoke_pregel` | `&self, state: T -> Result<(), std::fmt::Error>` | Explicit alias for `invoke` executing via the Pregel model. |
-| `invoke_with_state` | `&self, state: T -> Result<T, std::fmt::Error>` | Executes via Pregel and directly returns the final mutated state `Result<T, Error>`. |
+| `invoke` | `&self, state: T -> Result<T, GraphError>` | Traverses the graph, executing nodes and routing decisions, and returns the final state. |
+
+### 🚦 Error Handling & Custom Types
+
+`graphflow` uses strongly-typed custom error enums instead of basic Rust strings or placeholder errors:
+
+- **`GraphError`**: Errors during compilation and execution of `Graph<T>` / `CompiledGraph<T>`:
+  - `MissingEntryPoint` / `MissingFinishPoint`: Entry or finish point was not configured.
+  - `EntryPointNotFound(String)` / `FinishPointNotFound(String)`: Specified node does not exist.
+  - `EdgeSourceNotFound(String)` / `EdgeTargetNotFound(String)`: Edge endpoints are missing.
+  - `ConditionalEdgeSourceNotFound(String)`: Branching source node does not exist.
+  - `NodeNotFound(String)`: Referenced node not present in graph during traversal.
+  - `MissingEdge(String)`: Reached a dead-end non-finish node with no outgoing edge.
+  - `ExecutionError(String)`: Node function error during execution.
+- **`PregelError`**: Errors in the Bulk Synchronous Parallel execution engine:
+  - `ChannelNotFound(String)` / `MissingChannel(String)` / `NodeNotFound(String)`.
+  - `TypeMismatch(String)`: Data type mismatch on channel write.
+  - `MaxStepsExceeded(usize)`: Cycle did not terminate within `max_steps`.
+  - `ExecutionError(String)`: Worker thread or node execution failed.
+  - `Channel(ChannelError)`: Underlying channel operation failed.
+- **`ChannelError`**: Type downcast mismatches and channel updates.
+- **`GraphflowError`**: Unified top-level error enum implementing `std::error::Error` and source error chaining.
+
+### 📜 Logging System
+
+Initialize styled, timestamped, colored logging powered by the `log` crate:
+
+```rust
+use graphflow::{init_logger, init_logger_with_level};
+use log::LevelFilter;
+
+// Initialize with default INFO level (honors RUST_LOG env var)
+init_logger();
+
+// Or specify a default filter level
+init_logger_with_level(LevelFilter::Debug);
+```
 
 ---
 

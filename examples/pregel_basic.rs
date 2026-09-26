@@ -1,14 +1,16 @@
+use graphflow::init_logger;
 use graphflow::pregel::{
     BinaryOperatorAggregate, ChannelValues, EphemeralValue, LastValue, NodeBuilder, Pregel, Topic,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("=== LangGraph-style Pregel BSP Engine in Rust ===\n");
+    init_logger();
+    log::info!("=== LangGraph-style Pregel BSP Engine in Rust ===");
 
     // -----------------------------------------------------------------------
     // Example 1: Single Node Application
     // -----------------------------------------------------------------------
-    println!("--- Example 1: Single Node Application ---");
+    log::info!("--- Example 1: Single Node Application ---");
     let node1 = NodeBuilder::new("node1")
         .subscribe_only("a")
         .do_pure(|x: String| format!("{x}{x}"))
@@ -24,12 +26,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut inputs = ChannelValues::new();
     inputs.insert("a", "foo".to_string());
     let out = app.invoke_values(inputs)?;
-    println!("Output: {{'b': '{}'}}", out.get::<String>("b").unwrap());
+    log::info!("Output: {{'b': '{}'}}", out.get::<String>("b").unwrap());
 
     // -----------------------------------------------------------------------
     // Example 2: Multiple Nodes & Multiple Output Channels
     // -----------------------------------------------------------------------
-    println!("\n--- Example 2: Multiple Nodes & Output Channels ---");
+    log::info!("--- Example 2: Multiple Nodes & Output Channels ---");
     let n1 = NodeBuilder::new("node1")
         .subscribe_only("a")
         .do_pure(|x: String| format!("{x}{x}"))
@@ -52,7 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut inputs2 = ChannelValues::new();
     inputs2.insert("a", "foo".to_string());
     let out2 = app2.invoke_values(inputs2)?;
-    println!(
+    log::info!(
         "Output: {{'b': '{}', 'c': '{}'}}",
         out2.get::<String>("b").unwrap(),
         out2.get::<String>("c").unwrap()
@@ -61,7 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // -----------------------------------------------------------------------
     // Example 3: Topic Channel with Accumulation
     // -----------------------------------------------------------------------
-    println!("\n--- Example 3: Topic PubSub Channel ---");
+    log::info!("--- Example 3: Topic PubSub Channel ---");
     let t_node1 = NodeBuilder::new("node1")
         .subscribe_only("a")
         .do_pure(|x: String| format!("{x}{x}"))
@@ -85,12 +87,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut inputs3 = ChannelValues::new();
     inputs3.insert("a", "foo".to_string());
     let out3 = app3.invoke_values(inputs3)?;
-    println!("Output: {{'c': {:?}}}", out3.get::<Vec<String>>("c").unwrap());
+    log::info!("Output: {{'c': {:?}}}", out3.get::<Vec<String>>("c").unwrap());
 
     // -----------------------------------------------------------------------
     // Example 4: BinaryOperatorAggregate with Reducer
     // -----------------------------------------------------------------------
-    println!("\n--- Example 4: BinaryOperatorAggregate Reducer ---");
+    log::info!("--- Example 4: BinaryOperatorAggregate Reducer ---");
     let r_node1 = NodeBuilder::new("node1")
         .subscribe_only("a")
         .do_pure(|x: String| format!("{x}{x}"))
@@ -119,12 +121,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut inputs4 = ChannelValues::new();
     inputs4.insert("a", "foo".to_string());
     let out4 = app4.invoke_values(inputs4)?;
-    println!("Output: {{'c': '{}'}}", out4.get::<String>("c").unwrap());
+    log::info!("Output: {{'c': '{}'}}", out4.get::<String>("c").unwrap());
 
     // -----------------------------------------------------------------------
     // Example 5: Cycle with Termination
     // -----------------------------------------------------------------------
-    println!("\n--- Example 5: Cycle with Threshold ---");
+    log::info!("--- Example 5: Cycle with Threshold ---");
     let cycle_node = NodeBuilder::new("example_node")
         .subscribe_only("value")
         .do_pure_option(|x: String| {
@@ -145,8 +147,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut inputs5 = ChannelValues::new();
     inputs5.insert("value", "a".to_string());
     let out5 = app5.invoke_values(inputs5)?;
-    println!("Output: {{'value': '{}'}}", out5.get::<String>("value").unwrap());
+    log::info!("Output: {{'value': '{}'}}", out5.get::<String>("value").unwrap());
 
-    println!("\nAll Pregel examples completed successfully!");
+    log::info!("All Pregel examples completed successfully!");
     Ok(())
 }

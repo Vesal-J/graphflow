@@ -331,6 +331,12 @@ impl NodeBuilder {
 
     /// Compiles the `NodeBuilder` into an executable `PregelNode`.
     pub fn build(self) -> PregelNode {
+        log::trace!(
+            "Building PregelNode '{}' (triggers: {:?}, write_targets: {:?})",
+            self.name,
+            self.triggers,
+            self.write_targets
+        );
         let write_targets = self.write_targets.clone();
         let runner = self.runner.unwrap_or_else(|| {
             Box::new(|_, _| Ok(Vec::new()))

@@ -1,25 +1,23 @@
 #[cfg(test)]
 mod tests {
-    use std::fmt::Error;
-
-    use crate::Graph;
+    use crate::{Graph, GraphError};
 
     #[derive(Debug, PartialEq)]
     struct TestState {
         count: usize,
     }
 
-    fn increment(state: &mut TestState) -> Result<(), Error> {
+    fn increment(state: &mut TestState) -> Result<(), GraphError> {
         state.count += 1;
         Ok(())
     }
 
-    fn increment_by_two(state: &mut TestState) -> Result<(), Error> {
+    fn increment_by_two(state: &mut TestState) -> Result<(), GraphError> {
         state.count += 2;
         Ok(())
     }
 
-    fn finish(_state: &mut TestState) -> Result<(), Error> {
+    fn finish(_state: &mut TestState) -> Result<(), GraphError> {
         Ok(())
     }
 
@@ -504,7 +502,9 @@ mod tests {
         let mut graph: Graph<TestState> = Graph::new();
 
         graph
-            .add_node("failing_node".to_string(), |_| Err(Error))
+            .add_node("failing_node".to_string(), |_| {
+                Err(GraphError::ExecutionError("Intentional failure".to_string()))
+            })
             .set_entry_point("failing_node".to_string())
             .set_finish_point("failing_node".to_string());
 
@@ -527,7 +527,9 @@ mod tests {
         let mut graph: Graph<HaltState> = Graph::new();
 
         graph
-            .add_node("first_node_fails".to_string(), |_| Err(Error))
+            .add_node("first_node_fails".to_string(), |_| {
+                Err(GraphError::ExecutionError("Intentional failure".to_string()))
+            })
             .add_node("second_node".to_string(), |s| {
                 *s.ran_second.lock().unwrap() = true;
                 Ok(())
@@ -751,4 +753,120 @@ mod tests {
             "Entry point 'ghost_entry' does not exist"
         );
     }
+
+    // Custom GraphError variant matching and display checks
+    #[test]
+    fn test_graph_error_variants_and_display() {
+        use crate::errors::{ChannelError, GraphError, GraphflowError, PregelError};
+        use std::error::Error;
+
+        let err_entry = GraphError::MissingEntryPoint;
+        assert_eq!(err_entry.to_string(), "Entry point is not set");
+        assert_eq!(err_entry, "Entry point is not set");
+
+        let err_finish = GraphError::MissingFinishPoint;
+        assert_eq!(err_finish.to_string(), "Finish point is not set");
+
+        let err_entry_not_found = GraphError::EntryPointNotFound("start".to_string());
+        assert_eq!(err_entry_not_found, "Entry point 'start' does not exist");
+
+        let err_finish_not_found = GraphError::FinishPointNotFound("end".to_string());
+        assert_eq!(err_finish_not_found, "Finish point 'end' does not exist");
+
+        let err_edge_src = GraphError::EdgeSourceNotFound("ghost".to_string());
+        assert_eq!(err_edge_src, "Edge source 'ghost' does not exist");
+
+        let err_edge_dst = GraphError::EdgeTargetNotFound("ghost".to_string());
+        assert_eq!(err_edge_dst, "Edge target 'ghost' does not exist");
+
+        let err_cond = GraphError::ConditionalEdgeSourceNotFound("ghost".to_string());
+        assert_eq!(
+            err_cond,
+            "Conditional edge source 'ghost' does not exist"
+        );
+
+        let err_node = GraphError::NodeNotFound("missing".to_string());
+        assert_eq!(err_node, "Node 'missing' does not exist");
+
+        let err_missing_edge = GraphError::MissingEdge("dead_end".to_string());
+        assert_eq!(
+            err_missing_edge,
+            "No outgoing edge found from node 'dead_end'"
+        );
+
+        let err_exec = GraphError::ExecutionError("kaboom".to_string());
+        assert_eq!(err_exec, "Node execution failed: kaboom");
+
+        // From conversions
+        let from_str: GraphError = "custom error".into();
+        assert_eq!(from_str, GraphError::ExecutionError("custom error".to_string()));
+
+        let from_string: GraphError = String::from("custom string").into();
+        assert_eq!(from_string, GraphError::ExecutionError("custom string".to_string()));
+
+        let from_fmt: GraphError = std::fmt::Error.into();
+        assert!(matches!(from_fmt, GraphError::ExecutionError(_)));
+
+        // ChannelError checks
+        let ch_err = ChannelError::TypeMismatch("expected i32".to_string());
+        assert_eq!(ch_err.to_string(), "Type mismatch in channel: expected i32");
+        let pregel_err: PregelError = ch_err.into();
+        assert_eq!(pregel_err, PregelError::TypeMismatch("expected i32".to_string()));
+
+        let ch_custom = ChannelError::Custom("something failed".to_string());
+        let pregel_custom: PregelError = ch_custom.clone().into();
+        assert_eq!(pregel_custom, PregelError::Channel(ch_custom));
+        assert!(pregel_custom.source().is_some());
+
+        // GraphflowError checks
+        let top_graph: GraphflowError = GraphError::MissingEntryPoint.into();
+        assert_eq!(top_graph.to_string(), "Entry point is not set");
+        assert!(top_graph.source().is_some());
+
+        let top_pregel: GraphflowError = PregelError::EmptyInput.into();
+        assert_eq!(top_pregel.to_string(), "Input is empty or invalid");
+        assert!(top_pregel.source().is_some());
+    }
+
+    // Typed error matching during compilation and execution
+    #[test]
+    fn test_typed_error_matching() {
+        let mut graph: Graph<TestState> = Graph::new();
+        let err = graph.compile().unwrap_err();
+        assert_eq!(err, GraphError::MissingEntryPoint);
+
+        graph.set_entry_point("a".to_string());
+        let err2 = graph.compile().unwrap_err();
+        assert_eq!(err2, GraphError::MissingFinishPoint);
+
+        graph.set_finish_point("b".to_string());
+        let err3 = graph.compile().unwrap_err();
+        assert_eq!(err3, GraphError::EntryPointNotFound("a".to_string()));
+    }
+
+    // Logging system initialization and public re-exports test
+    #[test]
+    fn test_logging_init() {
+        use crate::logging::{init, init_with_level, try_init, try_init_with_level, LevelFilter};
+        use crate::{init_logger, init_logger_with_level};
+
+        // Calling init or try_init should not panic even if called multiple times
+        init();
+        init_with_level(LevelFilter::Debug);
+        init_logger();
+        init_logger_with_level(LevelFilter::Trace);
+
+        let res_try = try_init();
+        assert!(res_try.is_err(), "try_init should return Err once logger is initialized");
+
+        let res_try_level = try_init_with_level(LevelFilter::Info);
+        assert!(res_try_level.is_err(), "try_init_with_level should return Err once logger is initialized");
+
+        log::trace!("Test trace statement from unit test");
+        log::debug!("Test log statement from unit test");
+        log::info!("Test info statement from unit test");
+        log::warn!("Test warn statement from unit test");
+        log::error!("Test error statement from unit test");
+    }
 }
+

@@ -1,4 +1,4 @@
-use graphflow::Graph;
+use graphflow::{init_logger, Graph, GraphError};
 
 #[derive(Debug)]
 struct AgentState {
@@ -9,15 +9,18 @@ struct AgentState {
     response: Option<String>,
 }
 
-fn plan(state: &mut AgentState) -> Result<(), std::fmt::Error> {
-    println!("[Plan] Planning response for query: '{}'", state.query);
+fn plan(state: &mut AgentState) -> Result<(), GraphError> {
+    log::info!("[Plan] Planning response for query: '{}'", state.query);
     state.iterations += 1;
     Ok(())
 }
 
-fn search_tools(state: &mut AgentState) -> Result<(), std::fmt::Error> {
+fn search_tools(state: &mut AgentState) -> Result<(), GraphError> {
     state.iterations += 1;
-    println!("[Tool] Querying search tool (attempt {})...", state.iterations);
+    log::info!(
+        "[Tool] Querying search tool (attempt {})...",
+        state.iterations
+    );
     if state.iterations >= 2 {
         state.has_sufficient_context = true;
     }
@@ -32,13 +35,17 @@ fn route_decision(state: &AgentState) -> String {
     }
 }
 
-fn synthesize(state: &mut AgentState) -> Result<(), std::fmt::Error> {
-    println!("[Synthesize] Generating final response...");
+fn synthesize(state: &mut AgentState) -> Result<(), GraphError> {
+    log::info!("[Synthesize] Generating final response...");
     state.response = Some(format!("Final answer for '{}'", state.query));
     Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize styled logger
+    init_logger();
+
+    log::info!("Initializing LLM Agent Workflow Graph...");
     let mut graph: Graph<AgentState> = Graph::new();
 
     graph
@@ -50,9 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .set_entry_point("plan".to_string())
         .set_finish_point("synthesize".to_string());
 
-    let compiled_graph = graph
-        .compile()
-        .map_err(|e| format!("Graph compilation error: {e}"))?;
+    let compiled_graph = graph.compile()?;
 
     let state = AgentState {
         query: "What is the capital of Rustland?".to_string(),
@@ -62,8 +67,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         response: None,
     };
 
-    compiled_graph.invoke(state)?;
+    let result = compiled_graph.invoke(state)?;
 
-    println!("Agent workflow finished successfully.");
+    log::info!("Agent workflow finished successfully: {:?}", result.response);
     Ok(())
 }

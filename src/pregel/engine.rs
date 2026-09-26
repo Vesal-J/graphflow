@@ -38,13 +38,16 @@ impl Pregel {
         name: impl Into<String>,
         channel: C,
     ) -> &mut Self {
-        self.channels.insert(name.into(), Box::new(channel));
+        let name_str = name.into();
+        log::debug!("Registering Pregel channel: '{name_str}'");
+        self.channels.insert(name_str, Box::new(channel));
         self
     }
 
     /// Registers a pregel node / actor.
     pub fn add_node(&mut self, node: impl Into<PregelNode>) -> &mut Self {
         let node = node.into();
+        log::debug!("Registering Pregel node: '{}'", node.name);
         self.nodes.insert(node.name.clone(), node);
         self
     }
@@ -52,6 +55,7 @@ impl Pregel {
     /// Configures the designated input channels.
     pub fn set_input_channels(&mut self, channels: Vec<impl Into<String>>) -> &mut Self {
         self.input_channels = channels.into_iter().map(|s| s.into()).collect();
+        log::debug!("Set Pregel input channels: {:?}", self.input_channels);
         self
     }
 
@@ -59,11 +63,13 @@ impl Pregel {
     /// If left empty, all channels that hold values will be returned.
     pub fn set_output_channels(&mut self, channels: Vec<impl Into<String>>) -> &mut Self {
         self.output_channels = channels.into_iter().map(|s| s.into()).collect();
+        log::debug!("Set Pregel output channels: {:?}", self.output_channels);
         self
     }
 
     /// Sets the maximum number of supersteps allowed before returning `PregelError::MaxStepsExceeded`.
     pub fn set_max_steps(&mut self, max: usize) -> &mut Self {
+        log::debug!("Set Pregel max steps: {max}");
         self.max_steps = max;
         self
     }
@@ -71,15 +77,24 @@ impl Pregel {
     /// Executes the Pregel application with the provided `ChannelValues`.
     pub fn invoke_values(&self, inputs: ChannelValues) -> Result<ChannelValues, PregelError> {
         if inputs.is_empty() {
+            log::error!("Pregel invocation failed: input values are empty");
             return Err(PregelError::EmptyInput);
         }
 
         // Validate that all input channels exist
         for in_ch in inputs.values.keys() {
             if !self.channels.contains_key(in_ch) {
+                log::error!("Pregel input channel not found: '{in_ch}'");
                 return Err(PregelError::ChannelNotFound(in_ch.clone()));
             }
         }
+
+        log::info!(
+            "Starting Pregel execution: {} node(s), {} channel(s), max_steps={}",
+            self.nodes.len(),
+            self.channels.len(),
+            self.max_steps
+        );
 
         // Clone channels for isolated, thread-safe execution
         let mut channels: HashMap<String, Box<dyn Channel>> = HashMap::new();
@@ -91,12 +106,14 @@ impl Pregel {
         for (in_ch, val_boxed) in inputs.values {
             if let Some(ch) = channels.get_mut(&in_ch) {
                 ch.update(vec![val_boxed])
-                    .map_err(PregelError::TypeMismatch)?;
+                    .map_err(PregelError::from)?;
             }
         }
 
         let mut step = 0;
         while step < self.max_steps {
+            log::debug!("--- Pregel Superstep {step} ---");
+
             // ---------------------------------------------------------------
             // Phase 1: PLAN
             // Determine which nodes are triggered by channels updated in the
@@ -117,11 +134,13 @@ impl Pregel {
 
             // Quiescence: no active nodes left, execution finishes
             if active_nodes.is_empty() {
+                log::info!("Pregel execution quiesced at step {step}: no active nodes triggered");
                 break;
             }
 
             // Deterministic sort of active nodes
             active_nodes.sort();
+            log::debug!("Step {step}: Active nodes: {:?}", active_nodes);
 
             // ---------------------------------------------------------------
             // Phase 2: EXECUTION
@@ -141,9 +160,14 @@ impl Pregel {
                 let node = self
                     .nodes
                     .get(node_name)
-                    .ok_or_else(|| PregelError::NodeNotFound(node_name.clone()))?;
+                    .ok_or_else(|| {
+                        log::error!("Pregel node '{node_name}' not found");
+                        PregelError::NodeNotFound(node_name.clone())
+                    })?;
+                log::trace!("Step {step}: Executing single active node '{node_name}'");
                 (node.executor)(&snapshot)?
             } else {
+                log::trace!("Step {step}: Executing {} nodes concurrently", active_nodes.len());
                 let snapshot_ref = &snapshot;
                 let nodes_ref = &self.nodes;
 
@@ -153,7 +177,10 @@ impl Pregel {
                         for node_name in &active_nodes {
                             let node = nodes_ref
                                 .get(node_name)
-                                .ok_or_else(|| PregelError::NodeNotFound(node_name.clone()))?;
+                                .ok_or_else(|| {
+                                    log::error!("Pregel node '{node_name}' not found");
+                                    PregelError::NodeNotFound(node_name.clone())
+                                })?;
                             let handle =
                                 s.spawn(move || -> Result<Vec<ChannelWriteEntry>, PregelError> {
                                     (node.executor)(snapshot_ref)
@@ -164,6 +191,7 @@ impl Pregel {
                         let mut collected = Vec::new();
                         for handle in handles {
                             let res = handle.join().map_err(|_| {
+                                log::error!("Worker thread panicked during Pregel step {step}");
                                 PregelError::ExecutionError(
                                     "A worker thread panicked during node execution".to_string(),
                                 )
@@ -182,6 +210,7 @@ impl Pregel {
 
             // If active nodes produced no writes, execution has quiesced/finished
             if all_writes.is_empty() {
+                log::info!("Pregel execution quiesced at step {step}: no writes produced by active nodes");
                 break;
             }
 
@@ -193,6 +222,7 @@ impl Pregel {
                 HashMap::new();
             for entry in all_writes {
                 if !channels.contains_key(&entry.channel) {
+                    log::error!("Write target channel '{}' does not exist", entry.channel);
                     return Err(PregelError::ChannelNotFound(entry.channel));
                 }
                 grouped_writes
@@ -209,7 +239,7 @@ impl Pregel {
             // Apply grouped writes to channels
             for (target, writes) in grouped_writes {
                 if let Some(ch) = channels.get_mut(&target) {
-                    ch.update(writes).map_err(PregelError::TypeMismatch)?;
+                    ch.update(writes).map_err(PregelError::from)?;
                 }
             }
 
@@ -217,8 +247,11 @@ impl Pregel {
         }
 
         if step >= self.max_steps {
+            log::warn!("Pregel execution exceeded maximum supersteps ({})", self.max_steps);
             return Err(PregelError::MaxStepsExceeded(self.max_steps));
         }
+
+        log::info!("Pregel execution completed successfully in {step} superstep(s)");
 
         // ---------------------------------------------------------------
         // Produce final output
@@ -232,10 +265,8 @@ impl Pregel {
             }
         } else {
             for name in &self.output_channels {
-                if let Some(ch) = channels.get(name) {
-                    if let Some(boxed) = ch.get_boxed() {
-                        output.insert_boxed(name.clone(), boxed);
-                    }
+                if let Some(boxed) = channels.get(name).and_then(|ch| ch.get_boxed()) {
+                    output.insert_boxed(name.clone(), boxed);
                 }
             }
         }
@@ -263,11 +294,15 @@ impl Pregel {
         input: In,
         output_channel: &str,
     ) -> Result<Out, PregelError> {
+        log::debug!("Pregel invoke_single: channel '{input_channel}' -> '{output_channel}'");
         let mut inputs = ChannelValues::new();
         inputs.insert(input_channel, input);
         let outputs = self.invoke_values(inputs)?;
         outputs
             .get::<Out>(output_channel)
-            .ok_or_else(|| PregelError::MissingChannel(output_channel.to_string()))
+            .ok_or_else(|| {
+                log::error!("Missing output channel '{output_channel}' in results");
+                PregelError::MissingChannel(output_channel.to_string())
+            })
     }
 }

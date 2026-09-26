@@ -1,6 +1,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::errors::ChannelError;
+
 pub trait Channel: Send + Sync {
     /// Returns true if this channel was updated in the most recent superstep.
     fn is_updated(&self) -> bool;
@@ -10,7 +12,7 @@ pub trait Channel: Send + Sync {
     fn step_reset(&mut self);
 
     /// Applies a batch of values written to this channel during the Execution phase.
-    fn update(&mut self, values: Vec<Box<dyn Any + Send + Sync>>) -> Result<(), String>;
+    fn update(&mut self, values: Vec<Box<dyn Any + Send + Sync>>) -> Result<(), ChannelError>;
 
     /// Returns a boxed clone of the current channel value, if present.
     fn get_boxed(&self) -> Option<Box<dyn Any + Send + Sync>>;
@@ -62,16 +64,17 @@ impl<V: Clone + Send + Sync + 'static> Channel for LastValue<V> {
         self.updated = false;
     }
 
-    fn update(&mut self, values: Vec<Box<dyn Any + Send + Sync>>) -> Result<(), String> {
+    fn update(&mut self, values: Vec<Box<dyn Any + Send + Sync>>) -> Result<(), ChannelError> {
         if values.is_empty() {
             return Ok(());
         }
         if let Some(last) = values.into_iter().last() {
             let val = last
                 .downcast::<V>()
-                .map_err(|_| format!("Type mismatch in LastValue channel"))?;
+                .map_err(|_| ChannelError::TypeMismatch("Type mismatch in LastValue channel".to_string()))?;
             self.value = Some(*val);
             self.updated = true;
+            log::trace!("LastValue channel updated with new value");
         }
         Ok(())
     }
@@ -123,18 +126,20 @@ impl<V: Clone + Send + Sync + 'static> Channel for EphemeralValue<V> {
     fn step_reset(&mut self) {
         self.value = None;
         self.updated = false;
+        log::trace!("EphemeralValue channel reset (cleared)");
     }
 
-    fn update(&mut self, values: Vec<Box<dyn Any + Send + Sync>>) -> Result<(), String> {
+    fn update(&mut self, values: Vec<Box<dyn Any + Send + Sync>>) -> Result<(), ChannelError> {
         if values.is_empty() {
             return Ok(());
         }
         if let Some(last) = values.into_iter().last() {
             let val = last
                 .downcast::<V>()
-                .map_err(|_| format!("Type mismatch in EphemeralValue channel"))?;
+                .map_err(|_| ChannelError::TypeMismatch("Type mismatch in EphemeralValue channel".to_string()))?;
             self.value = Some(*val);
             self.updated = true;
+            log::trace!("EphemeralValue channel updated with new value");
         }
         Ok(())
     }
@@ -193,11 +198,12 @@ impl<V: Clone + Send + Sync + PartialEq + 'static> Channel for Topic<V> {
     fn step_reset(&mut self) {
         if !self.accumulate {
             self.values.clear();
+            log::trace!("Topic channel non-accumulating reset (cleared values)");
         }
         self.updated = false;
     }
 
-    fn update(&mut self, values: Vec<Box<dyn Any + Send + Sync>>) -> Result<(), String> {
+    fn update(&mut self, values: Vec<Box<dyn Any + Send + Sync>>) -> Result<(), ChannelError> {
         if values.is_empty() {
             return Ok(());
         }
@@ -205,7 +211,7 @@ impl<V: Clone + Send + Sync + PartialEq + 'static> Channel for Topic<V> {
         for boxed in values {
             let val = *boxed
                 .downcast::<V>()
-                .map_err(|_| format!("Type mismatch in Topic channel"))?;
+                .map_err(|_| ChannelError::TypeMismatch("Type mismatch in Topic channel".to_string()))?;
             if self.dedup && self.values.contains(&val) {
                 continue;
             }
@@ -214,6 +220,7 @@ impl<V: Clone + Send + Sync + PartialEq + 'static> Channel for Topic<V> {
         }
         if added {
             self.updated = true;
+            log::trace!("Topic channel updated (count: {})", self.values.len());
         }
         Ok(())
     }
@@ -274,19 +281,20 @@ impl<V: Clone + Send + Sync + 'static> Channel for BinaryOperatorAggregate<V> {
         self.updated = false;
     }
 
-    fn update(&mut self, values: Vec<Box<dyn Any + Send + Sync>>) -> Result<(), String> {
+    fn update(&mut self, values: Vec<Box<dyn Any + Send + Sync>>) -> Result<(), ChannelError> {
         if values.is_empty() {
             return Ok(());
         }
         for boxed in values {
             let val = *boxed
                 .downcast::<V>()
-                .map_err(|_| format!("Type mismatch in BinaryOperatorAggregate channel"))?;
+                .map_err(|_| ChannelError::TypeMismatch("Type mismatch in BinaryOperatorAggregate channel".to_string()))?;
             let current = self.value.take();
             let new_val = (self.reducer)(current, val);
             self.value = Some(new_val);
             self.updated = true;
         }
+        log::trace!("BinaryOperatorAggregate channel updated via reducer");
         Ok(())
     }
 
