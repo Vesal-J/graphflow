@@ -1,6 +1,6 @@
 # Pregel Engine Architecture ⚙️
 
-This directory contains the implementation of the **Pregel / Bulk Synchronous Parallel (BSP)** execution engine for `graphflow` (`rustchain`), modeled after [LangGraph's](https://github.com/langchain-ai/langgraph) core runtime.
+This directory contains the implementation of the **Pregel / Bulk Synchronous Parallel (BSP)** execution engine for `graphflow`, modeled after [LangGraph's](https://github.com/langchain-ai/langgraph) core runtime.
 
 ---
 
