@@ -40,11 +40,6 @@ impl<T> Graph<T> {
         self
     }
 
-    pub fn add_parallel_edge(&mut self, from: String, targets: Vec<String>) -> &mut Self {
-        self.edges.insert(from, targets.join(", "));
-        self
-    }
-
     pub fn add_conditional_edge(&mut self, from: String, branch: BranchFunction<T>) -> &mut Self {
         self.conditional_edges.insert(from, branch);
         self
