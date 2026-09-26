@@ -11,7 +11,7 @@ pub struct CompiledGraph<T> {
 }
 
 impl<T> CompiledGraph<T> {
-    pub fn invoke(&self, mut state: T) -> Result<(), Error> {
+    pub fn invoke(&self, mut state: T) -> Result<T, Error> {
         let mut current = self.entry_point.clone();
 
         loop {
@@ -33,6 +33,6 @@ impl<T> CompiledGraph<T> {
             }
         }
 
-        Ok(())
+        Ok(state)
     }
 }

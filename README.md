@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/badge/crates.io-v0.1.0-orange.svg)](https://crates.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust: 2024](https://img.shields.io/badge/Rust-2024%20Edition-black.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/Tests-10%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-39%20passing-brightgreen.svg)]()
 
 > A lightweight, LangGraph-inspired stateful workflow engine for Rust.
 
@@ -357,6 +357,67 @@ Run this example:
 cargo run --example llm_agent_workflow
 ```
 
+### Example 3: Parallel Tasks with Pregel Execution (Fork-Join)
+
+Execute multiple tasks concurrently in a single Pregel superstep using scoped threads with a synchronization barrier before the next step:
+
+```rust
+use graphflow::Graph;
+use std::sync::{Arc, Mutex};
+
+#[derive(Debug, Clone)]
+struct SearchState {
+    query: String,
+    results: Arc<Mutex<Vec<String>>>,
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut graph: Graph<SearchState> = Graph::new();
+
+    graph
+        .add_node("start".to_string(), |_| Ok(()))
+        .add_node("search_web".to_string(), |s| {
+            s.results.lock().unwrap().push("Web Result".to_string());
+            Ok(())
+        })
+        .add_node("search_db".to_string(), |s| {
+            s.results.lock().unwrap().push("DB Result".to_string());
+            Ok(())
+        })
+        .add_node("aggregate".to_string(), |s| {
+            println!("Collected {} results!", s.results.lock().unwrap().len());
+            Ok(())
+        })
+        .add_node("finish".to_string(), |_| Ok(()))
+        // Fan-out: triggers search_web and search_db concurrently in the same superstep
+        .add_parallel_edge(
+            "start".to_string(),
+            vec!["search_web".to_string(), "search_db".to_string()],
+        )
+        // Fan-in: both workers route to aggregate at the barrier
+        .add_edge("search_web".to_string(), "aggregate".to_string())
+        .add_edge("search_db".to_string(), "aggregate".to_string())
+        .add_edge("aggregate".to_string(), "finish".to_string())
+        .set_entry_point("start".to_string())
+        .set_finish_point("finish".to_string());
+
+    let compiled = graph.compile().unwrap();
+
+    let state = SearchState {
+        query: "Pregel in Rust".to_string(),
+        results: Arc::new(Mutex::new(Vec::new())),
+    };
+
+    compiled.invoke_pregel(state)?;
+    Ok(())
+}
+```
+
+Run this example:
+```bash
+cargo run --example parallel_pregel
+```
+
 ---
 
 ## 📖 API Reference
@@ -370,9 +431,10 @@ The builder struct used to declare workflow topology.
 | `new()` | `pub fn new() -> Self` | Creates an empty graph builder. |
 | `default()` | `fn default() -> Self` | Equivalent to `Graph::new()`. |
 | `add_node` | `&mut Self -> &mut Self` | Registers a named node function. |
-| `add_edge` | `&mut Self -> &mut Self` | Adds a directional edge between two nodes. |
-| `add_conditional_edge` | `&mut Self -> &mut Self` | Adds a dynamic branching edge evaluated via `BranchFunction<T>`. |
-| `set_entry_point` | `&mut Self -> &mut Self` | Sets the start node name. |
+| `add_edge` | `&mut Self -> &mut Self` | Adds a directional edge between two nodes (supports comma-separated targets). |
+| `add_parallel_edge` | `&mut Self, from: String, targets: Vec<String> -> &mut Self` | Adds a fan-out transition activating multiple parallel tasks in the next superstep. |
+| `add_conditional_edge` | `&mut Self -> &mut Self` | Adds a dynamic branching edge evaluated via `BranchFunction<T>` (can return comma-separated targets for parallel fan-out). |
+| `set_entry_point` | `&mut Self -> &mut Self` | Sets the start node name (or comma-separated names for parallel entry). |
 | `set_finish_point` | `&mut Self -> &mut Self` | Sets the termination node name. |
 | `compile` | `&mut Self -> Result<CompiledGraph<T>, String>` | Validates the graph structure and returns an executable `CompiledGraph`. |
 
@@ -382,7 +444,9 @@ The validated, immutable graph ready for execution.
 
 | Method | Signature | Description |
 | :--- | :--- | :--- |
-| `invoke` | `&self, mut state: T -> Result<(), std::fmt::Error>` | Executes the graph synchronously from the entry point to the finish point. |
+| `invoke` | `&self, state: T -> Result<(), std::fmt::Error>` | Executes the graph using the Pregel Bulk Synchronous Parallel execution model. |
+| `invoke_pregel` | `&self, state: T -> Result<(), std::fmt::Error>` | Explicit alias for `invoke` executing via the Pregel model. |
+| `invoke_with_state` | `&self, state: T -> Result<T, std::fmt::Error>` | Executes via Pregel and directly returns the final mutated state `Result<T, Error>`. |
 
 ---
 
@@ -391,11 +455,11 @@ The validated, immutable graph ready for execution.
 When `.compile()` is invoked, `graphflow` ensures:
 1. **Entry Point Configured**: An entry point must be provided (`"Entry point is not set"`).
 2. **Finish Point Configured**: A finish point must be provided (`"Finish point is not set"`).
-3. **Valid Entry Node**: Entry point must correspond to an added node (`"Entry point '<name>' does not exist"`).
+3. **Valid Entry Node**: Entry point (or all comma-separated entry points) must correspond to added nodes (`"Entry point '<name>' does not exist"`).
 4. **Valid Finish Node**: Finish point must correspond to an added node (`"Finish point '<name>' does not exist"`).
 5. **Edge Integrity**: For every edge `from -> to`:
    - `from` must exist (`"Edge source '<name>' does not exist"`).
-   - `to` must exist (`"Edge target '<name>' does not exist"`).
+   - all targets in `to` must exist (`"Edge target '<name>' does not exist"`).
 6. **Conditional Edge Integrity**: For every conditional edge `from`:
    - `from` must exist (`"Conditional edge source '<name>' does not exist"`).
 
@@ -403,7 +467,7 @@ When `.compile()` is invoked, `graphflow` ensures:
 
 ## 🧪 Running Tests & Examples
 
-To run the complete test suite:
+To run the complete test suite (39 tests):
 
 ```bash
 cargo test
@@ -417,6 +481,9 @@ cargo run --example counter_loop
 
 # Run LLM agent workflow example
 cargo run --example llm_agent_workflow
+
+# Run Pregel parallel Fork-Join example
+cargo run --example parallel_pregel
 ```
 
 ---

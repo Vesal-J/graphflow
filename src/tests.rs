@@ -690,5 +690,439 @@ mod tests {
             vec!["split", "right", "join", "finish"]
         );
     }
+
+    // 29. Pregel parallel execution with Fork-Join topology
+    #[test]
+    fn test_pregel_parallel_fork_join() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct ForkJoinState {
+            workers_completed: Arc<Mutex<Vec<String>>>,
+            join_saw_count: Arc<Mutex<usize>>,
+        }
+
+        let mut graph: Graph<ForkJoinState> = Graph::new();
+
+        graph
+            .add_node("start".to_string(), |_| Ok(()))
+            .add_node("worker_1".to_string(), |s| {
+                s.workers_completed.lock().unwrap().push("w1".to_string());
+                Ok(())
+            })
+            .add_node("worker_2".to_string(), |s| {
+                s.workers_completed.lock().unwrap().push("w2".to_string());
+                Ok(())
+            })
+            .add_node("worker_3".to_string(), |s| {
+                s.workers_completed.lock().unwrap().push("w3".to_string());
+                Ok(())
+            })
+            .add_node("join".to_string(), |s| {
+                let count = s.workers_completed.lock().unwrap().len();
+                *s.join_saw_count.lock().unwrap() = count;
+                Ok(())
+            })
+            .add_node("finish".to_string(), |_| Ok(()))
+            .add_parallel_edge(
+                "start".to_string(),
+                vec![
+                    "worker_1".to_string(),
+                    "worker_2".to_string(),
+                    "worker_3".to_string(),
+                ],
+            )
+            .add_edge("worker_1".to_string(), "join".to_string())
+            .add_edge("worker_2".to_string(), "join".to_string())
+            .add_edge("worker_3".to_string(), "join".to_string())
+            .add_edge("join".to_string(), "finish".to_string())
+            .set_entry_point("start".to_string())
+            .set_finish_point("finish".to_string());
+
+        let compiled = graph.compile().unwrap();
+
+        let state = ForkJoinState {
+            workers_completed: Arc::new(Mutex::new(Vec::new())),
+            join_saw_count: Arc::new(Mutex::new(0)),
+        };
+
+        compiled.invoke(state.clone()).unwrap();
+
+        let workers = state.workers_completed.lock().unwrap().clone();
+        assert_eq!(workers.len(), 3);
+        assert!(workers.contains(&"w1".to_string()));
+        assert!(workers.contains(&"w2".to_string()));
+        assert!(workers.contains(&"w3".to_string()));
+        assert_eq!(*state.join_saw_count.lock().unwrap(), 3);
+    }
+
+    // 30. Parallel tasks execute across distinct threads
+    #[test]
+    fn test_pregel_parallel_distinct_threads() {
+        use std::collections::HashSet;
+        use std::sync::{Arc, Mutex};
+        use std::thread::ThreadId;
+
+        #[derive(Clone)]
+        struct ThreadTrackingState {
+            threads: Arc<Mutex<HashSet<ThreadId>>>,
+        }
+
+        let mut graph: Graph<ThreadTrackingState> = Graph::new();
+
+        graph
+            .add_node("start".to_string(), |_| Ok(()))
+            .add_node("task_a".to_string(), |s| {
+                s.threads.lock().unwrap().insert(std::thread::current().id());
+                Ok(())
+            })
+            .add_node("task_b".to_string(), |s| {
+                s.threads.lock().unwrap().insert(std::thread::current().id());
+                Ok(())
+            })
+            .add_node("finish".to_string(), |_| Ok(()))
+            .add_parallel_edge(
+                "start".to_string(),
+                vec!["task_a".to_string(), "task_b".to_string()],
+            )
+            .add_edge("task_a".to_string(), "finish".to_string())
+            .add_edge("task_b".to_string(), "finish".to_string())
+            .set_entry_point("start".to_string())
+            .set_finish_point("finish".to_string());
+
+        let compiled = graph.compile().unwrap();
+
+        let state = ThreadTrackingState {
+            threads: Arc::new(Mutex::new(HashSet::new())),
+        };
+
+        compiled.invoke(state.clone()).unwrap();
+
+        let threads_used = state.threads.lock().unwrap().clone();
+        assert_eq!(threads_used.len(), 2);
+    }
+
+    // 31. invoke_with_state returns the final mutated state directly
+    #[test]
+    fn test_pregel_invoke_with_state() {
+        let mut graph: Graph<TestState> = Graph::new();
+
+        graph
+            .add_node("step_1".to_string(), increment)
+            .add_node("step_2".to_string(), increment_by_two)
+            .add_node("finish".to_string(), finish)
+            .add_edge("step_1".to_string(), "step_2".to_string())
+            .add_edge("step_2".to_string(), "finish".to_string())
+            .set_entry_point("step_1".to_string())
+            .set_finish_point("finish".to_string());
+
+        let compiled = graph.compile().unwrap();
+        let final_state = compiled.invoke(TestState { count: 10 }).unwrap();
+
+        assert_eq!(final_state.count, 13);
+    }
+
+    // 32. invoke_pregel explicit method works identically
+    #[test]
+    fn test_pregel_invoke_pregel_explicit() {
+        let mut graph: Graph<TestState> = Graph::new();
+
+        graph
+            .add_node("increment".to_string(), increment)
+            .add_node("finish".to_string(), finish)
+            .add_edge("increment".to_string(), "finish".to_string())
+            .set_entry_point("increment".to_string())
+            .set_finish_point("finish".to_string());
+
+        let compiled = graph.compile().unwrap();
+        let result = compiled.invoke(TestState { count: 0 });
+
+        assert!(result.is_ok());
+    }
+
+    // 33. Dynamic conditional branching to parallel tasks
+    #[test]
+    fn test_pregel_conditional_edge_to_parallel_tasks() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct DynamicRouteState {
+            run_parallel: bool,
+            executed: Arc<Mutex<Vec<&'static str>>>,
+        }
+
+        let mut graph: Graph<DynamicRouteState> = Graph::new();
+
+        graph
+            .add_node("router".to_string(), |_| Ok(()))
+            .add_node("single_worker".to_string(), |s| {
+                s.executed.lock().unwrap().push("single");
+                Ok(())
+            })
+            .add_node("parallel_a".to_string(), |s| {
+                s.executed.lock().unwrap().push("parallel_a");
+                Ok(())
+            })
+            .add_node("parallel_b".to_string(), |s| {
+                s.executed.lock().unwrap().push("parallel_b");
+                Ok(())
+            })
+            .add_node("finish".to_string(), |_| Ok(()))
+            .add_conditional_edge("router".to_string(), |s| {
+                if s.run_parallel {
+                    "parallel_a, parallel_b".to_string()
+                } else {
+                    "single_worker".to_string()
+                }
+            })
+            .add_edge("single_worker".to_string(), "finish".to_string())
+            .add_edge("parallel_a".to_string(), "finish".to_string())
+            .add_edge("parallel_b".to_string(), "finish".to_string())
+            .set_entry_point("router".to_string())
+            .set_finish_point("finish".to_string());
+
+        let compiled = graph.compile().unwrap();
+
+        // 1. Test single branch
+        let state_single = DynamicRouteState {
+            run_parallel: false,
+            executed: Arc::new(Mutex::new(Vec::new())),
+        };
+        compiled.invoke(state_single.clone()).unwrap();
+        assert_eq!(*state_single.executed.lock().unwrap(), vec!["single"]);
+
+        // 2. Test parallel branch
+        let state_parallel = DynamicRouteState {
+            run_parallel: true,
+            executed: Arc::new(Mutex::new(Vec::new())),
+        };
+        compiled.invoke(state_parallel.clone()).unwrap();
+        let executed = state_parallel.executed.lock().unwrap().clone();
+        assert_eq!(executed.len(), 2);
+        assert!(executed.contains(&"parallel_a"));
+        assert!(executed.contains(&"parallel_b"));
+    }
+
+    // 34. Multi-stage parallel pipeline
+    #[test]
+    fn test_pregel_multi_stage_parallel_pipeline() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct PipelineState {
+            stage1: Arc<Mutex<Vec<&'static str>>>,
+            stage2: Arc<Mutex<Vec<&'static str>>>,
+        }
+
+        let mut graph: Graph<PipelineState> = Graph::new();
+
+        graph
+            .add_node("start".to_string(), |_| Ok(()))
+            .add_node("s1_a".to_string(), |s| {
+                s.stage1.lock().unwrap().push("s1_a");
+                Ok(())
+            })
+            .add_node("s1_b".to_string(), |s| {
+                s.stage1.lock().unwrap().push("s1_b");
+                Ok(())
+            })
+            .add_node("s2_a".to_string(), |s| {
+                s.stage2.lock().unwrap().push("s2_a");
+                Ok(())
+            })
+            .add_node("s2_b".to_string(), |s| {
+                s.stage2.lock().unwrap().push("s2_b");
+                Ok(())
+            })
+            .add_node("finish".to_string(), |_| Ok(()))
+            .add_parallel_edge(
+                "start".to_string(),
+                vec!["s1_a".to_string(), "s1_b".to_string()],
+            )
+            .add_parallel_edge(
+                "s1_a".to_string(),
+                vec!["s2_a".to_string(), "s2_b".to_string()],
+            )
+            .add_parallel_edge(
+                "s1_b".to_string(),
+                vec!["s2_a".to_string(), "s2_b".to_string()],
+            )
+            .add_edge("s2_a".to_string(), "finish".to_string())
+            .add_edge("s2_b".to_string(), "finish".to_string())
+            .set_entry_point("start".to_string())
+            .set_finish_point("finish".to_string());
+
+        let compiled = graph.compile().unwrap();
+
+        let state = PipelineState {
+            stage1: Arc::new(Mutex::new(Vec::new())),
+            stage2: Arc::new(Mutex::new(Vec::new())),
+        };
+
+        compiled.invoke(state.clone()).unwrap();
+
+        let stage1_res = state.stage1.lock().unwrap().clone();
+        assert_eq!(stage1_res.len(), 2);
+        assert!(stage1_res.contains(&"s1_a"));
+        assert!(stage1_res.contains(&"s1_b"));
+
+        let stage2_res = state.stage2.lock().unwrap().clone();
+        assert_eq!(stage2_res.len(), 2);
+        assert!(stage2_res.contains(&"s2_a"));
+        assert!(stage2_res.contains(&"s2_b"));
+    }
+
+    // 35. Parallel task error propagation immediately fails invoke
+    #[test]
+    fn test_pregel_parallel_error_propagation() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct ErrorState {
+            join_executed: Arc<Mutex<bool>>,
+        }
+
+        let mut graph: Graph<ErrorState> = Graph::new();
+
+        graph
+            .add_node("start".to_string(), |_| Ok(()))
+            .add_node("worker_ok".to_string(), |_| Ok(()))
+            .add_node("worker_err".to_string(), |_| Err(Error))
+            .add_node("join".to_string(), |s| {
+                *s.join_executed.lock().unwrap() = true;
+                Ok(())
+            })
+            .add_node("finish".to_string(), |_| Ok(()))
+            .add_parallel_edge(
+                "start".to_string(),
+                vec!["worker_ok".to_string(), "worker_err".to_string()],
+            )
+            .add_edge("worker_ok".to_string(), "join".to_string())
+            .add_edge("worker_err".to_string(), "join".to_string())
+            .add_edge("join".to_string(), "finish".to_string())
+            .set_entry_point("start".to_string())
+            .set_finish_point("finish".to_string());
+
+        let compiled = graph.compile().unwrap();
+        let state = ErrorState {
+            join_executed: Arc::new(Mutex::new(false)),
+        };
+
+        let result = compiled.invoke(state.clone());
+        assert!(result.is_err());
+        assert_eq!(*state.join_executed.lock().unwrap(), false);
+    }
+
+    // 36. Dead end in a parallel branch returns error
+    #[test]
+    fn test_pregel_parallel_dead_end_fails() {
+        let mut graph: Graph<TestState> = Graph::new();
+
+        graph
+            .add_node("start".to_string(), increment)
+            .add_node("worker_ok".to_string(), increment)
+            .add_node("dead_end_worker".to_string(), increment)
+            .add_node("finish".to_string(), finish)
+            .add_parallel_edge(
+                "start".to_string(),
+                vec!["worker_ok".to_string(), "dead_end_worker".to_string()],
+            )
+            .add_edge("worker_ok".to_string(), "finish".to_string())
+            // dead_end_worker has NO outgoing edge
+            .set_entry_point("start".to_string())
+            .set_finish_point("finish".to_string());
+
+        let compiled = graph.compile().unwrap();
+        let result = compiled.invoke(TestState { count: 0 });
+
+        assert!(result.is_err());
+    }
+
+    // 37. Parallel entry points execution
+    #[test]
+    fn test_pregel_parallel_entry_point() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct MultiEntryState {
+            entries_ran: Arc<Mutex<Vec<&'static str>>>,
+        }
+
+        let mut graph: Graph<MultiEntryState> = Graph::new();
+
+        graph
+            .add_node("entry_1".to_string(), |s| {
+                s.entries_ran.lock().unwrap().push("entry_1");
+                Ok(())
+            })
+            .add_node("entry_2".to_string(), |s| {
+                s.entries_ran.lock().unwrap().push("entry_2");
+                Ok(())
+            })
+            .add_node("finish".to_string(), |_| Ok(()))
+            .add_edge("entry_1".to_string(), "finish".to_string())
+            .add_edge("entry_2".to_string(), "finish".to_string())
+            .set_entry_point("entry_1, entry_2".to_string())
+            .set_finish_point("finish".to_string());
+
+        let compiled = graph.compile().unwrap();
+
+        let state = MultiEntryState {
+            entries_ran: Arc::new(Mutex::new(Vec::new())),
+        };
+
+        compiled.invoke(state.clone()).unwrap();
+
+        let ran = state.entries_ran.lock().unwrap().clone();
+        assert_eq!(ran.len(), 2);
+        assert!(ran.contains(&"entry_1"));
+        assert!(ran.contains(&"entry_2"));
+    }
+
+    // 38. Compile fails when one of the parallel edge targets does not exist
+    #[test]
+    fn test_compile_with_invalid_parallel_edge_target_fails() {
+        let mut graph: Graph<TestState> = Graph::new();
+
+        graph
+            .add_node("start".to_string(), increment)
+            .add_node("valid_worker".to_string(), increment)
+            .add_node("finish".to_string(), finish)
+            .add_parallel_edge(
+                "start".to_string(),
+                vec!["valid_worker".to_string(), "ghost_worker".to_string()],
+            )
+            .set_entry_point("start".to_string())
+            .set_finish_point("finish".to_string());
+
+        let result = graph.compile();
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            "Edge target 'ghost_worker' does not exist"
+        );
+    }
+
+    // 39. Compile fails when one of the parallel entry points does not exist
+    #[test]
+    fn test_compile_with_invalid_parallel_entry_point_fails() {
+        let mut graph: Graph<TestState> = Graph::new();
+
+        graph
+            .add_node("valid_entry".to_string(), increment)
+            .add_node("finish".to_string(), finish)
+            .set_entry_point("valid_entry, ghost_entry".to_string())
+            .set_finish_point("finish".to_string());
+
+        let result = graph.compile();
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            "Entry point 'ghost_entry' does not exist"
+        );
+    }
 }
+
 

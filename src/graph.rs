@@ -40,6 +40,11 @@ impl<T> Graph<T> {
         self
     }
 
+    pub fn add_parallel_edge(&mut self, from: String, targets: Vec<String>) -> &mut Self {
+        self.edges.insert(from, targets.join(", "));
+        self
+    }
+
     pub fn add_conditional_edge(&mut self, from: String, branch: BranchFunction<T>) -> &mut Self {
         self.conditional_edges.insert(from, branch);
         self
@@ -62,8 +67,10 @@ impl<T> Graph<T> {
         let entry_point_clone = self.finish_point.clone();
         let finish_point = entry_point_clone.ok_or("Finish point is not set")?;
 
-        if !self.nodes.contains_key(&entry_point) {
-            return Err(format!("Entry point '{}' does not exist", entry_point));
+        for entry in entry_point.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            if !self.nodes.contains_key(entry) {
+                return Err(format!("Entry point '{}' does not exist", entry));
+            }
         }
 
         if !self.nodes.contains_key(&finish_point) {
@@ -75,8 +82,10 @@ impl<T> Graph<T> {
                 return Err(format!("Edge source '{}' does not exist", from));
             }
 
-            if !self.nodes.contains_key(to) {
-                return Err(format!("Edge target '{}' does not exist", to));
+            for target in to.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                if !self.nodes.contains_key(target) {
+                    return Err(format!("Edge target '{}' does not exist", target));
+                }
             }
         }
 
